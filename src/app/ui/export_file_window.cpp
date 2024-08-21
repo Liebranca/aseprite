@@ -19,6 +19,7 @@
 #include "app/ui_context.h"
 #include "base/convert_to.h"
 #include "base/fs.h"
+#include "base/launcher.h"
 #include "base/string.h"
 #include "doc/selected_frames.h"
 #include "doc/tag.h"
@@ -79,6 +80,10 @@ ExportFileWindow::ExportFileWindow(const Doc* doc)
 
   updateAdjustResizeButton();
 
+  outputPath()->Click.connect(
+    [this]{
+      base::launcher::open_folder(m_outputPath);
+    });
   outputFilename()->Change.connect(
     [this]{
       m_outputFilename = outputFilename()->text();
@@ -190,11 +195,43 @@ void ExportFileWindow::setAniDir(const doc::AniDir aniDir)
   anidir()->setSelectedItemIndex(int(aniDir));
 }
 
-void ExportFileWindow::setOutputFilename(const std::string& pathAndFilename)
+void ExportFileWindow::updateOutputPathButton(const bool resetPath)
 {
-  if (base::get_file_path(m_doc->filename()).empty()) {
+  if (m_outputPath.empty()) {
+    m_outputPath = base::get_current_path();
+  }
+
+  // Is full path hidden?
+  if (!Preferences::instance().general.showFullPath()) {
+    // Select which string to put in place of the full path
+    bool empty = base::get_file_path(m_doc->filename()).empty();
+    const std::string pathBase = (empty ? app::Strings::export_file_current_folder()
+                                        : app::Strings::export_file_sprite_folder());
+    // When the user explicitly selects an output folder that is
+    // distinct from either the sprite folder or current directory,
+    // then show "(X folder)/subpath/" for clarity
+    std::string pathFolder = (empty ? base::get_current_path()
+                                    : base::get_file_path(m_doc->filename()));
+    pathFolder = base::get_relative_path(m_outputPath, pathFolder);
+    if (resetPath && !pathFolder.empty()) {
+      outputPath()->setText("(" + pathBase + ")" + base::path_separator +
+                            pathFolder + base::path_separator);
+    } else {
+      outputPath()->setText(pathBase);
+    }
+  }
+  else {
+    outputPath()->setText(m_outputPath + base::path_separator);
+  }
+}
+
+void ExportFileWindow::setOutputFilename(const std::string& pathAndFilename,
+                                         bool resetPath)
+{
+  if (resetPath || base::get_file_path(m_doc->filename()).empty()) {
     m_outputPath = base::get_file_path(pathAndFilename);
     m_outputFilename = base::get_file_name(pathAndFilename);
+    resetPath = true;
   }
   else {
     m_outputPath = base::get_file_path(m_doc->filename());
@@ -204,9 +241,11 @@ void ExportFileWindow::setOutputFilename(const std::string& pathAndFilename)
     if (m_outputFilename == pathAndFilename) {
       m_outputPath = base::get_file_path(pathAndFilename);
       m_outputFilename = base::get_file_name(pathAndFilename);
+      resetPath = true;
     }
   }
 
+  updateOutputPathButton(resetPath);
   updateOutputFilenameEntry();
 }
 
