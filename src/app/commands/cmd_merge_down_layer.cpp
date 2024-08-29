@@ -13,6 +13,7 @@
 #include "app/cmd/add_cel.h"
 #include "app/cmd/replace_image.h"
 #include "app/cmd/set_cel_position.h"
+#include "app/cmd/set_cel_opacity.h"
 #include "app/cmd/unlink_cel.h"
 #include "app/commands/command.h"
 #include "app/context_access.h"
@@ -76,15 +77,38 @@ void MergeDownLayerCommand::onExecute(Context* context)
   ContextWriter writer(context);
   Doc* document(writer.document());
   Sprite* sprite(writer.sprite());
-  LayerImage* src_layer = static_cast<LayerImage*>(writer.layer());
-  Layer* dst_layer = src_layer->getPrevious();
+  LayerImage* top_layer = static_cast<LayerImage*>(writer.layer());
+  Layer* bottom_layer = top_layer->getPrevious();
 
   Tx tx(writer, friendlyName(), ModifyDocument);
 
   for (frame_t frpos = 0; frpos<sprite->totalFrames(); ++frpos) {
     // Get frames
-    Cel* src_cel = src_layer->cel(frpos);
-    Cel* dst_cel = dst_layer->cel(frpos);
+    Cel* src_cel = top_layer->cel(frpos);
+    Cel* dst_cel = bottom_layer->cel(frpos);
+
+    // By default, the cel at the top would be source and
+    // the bottom one would be destination, so top is then
+    // merged into bottom. However, if the topmost cel has
+    // a lower z-index, we must invert the merging order
+    // while still keeping the original top/bottom distinction
+    Cel* bottom_cel = dst_cel;
+    LayerImage* src_layer = top_layer;
+    Layer* dst_layer = bottom_layer;
+
+    if ((bottom_cel != NULL && src_cel != NULL) &&
+        (bottom_cel->zIndex() > src_cel->zIndex())) {
+      // Set topmost layer and cel as destination,
+      // and bottom layer and cel as source
+      Layer* tmp_layer = dst_layer;
+      dst_layer = static_cast<Layer*>(src_layer);
+      src_layer = static_cast<LayerImage*>(tmp_layer);
+
+      Cel* tmp_cel = dst_cel;
+      dst_cel = src_cel;
+      src_cel = tmp_cel;
+
+    }
 
     // Get images
     Image* src_image;
@@ -99,6 +123,11 @@ void MergeDownLayerCommand::onExecute(Context* context)
 
     // With source image?
     if (src_image) {
+
+      // Do nothing when source is bottom and top is transparent
+      if ((src_cel == bottom_cel) && !dst_image)
+        continue;
+
       int t;
       int opacity;
       opacity = MUL_UN8(src_cel->opacity(), src_layer->opacity(), t);
@@ -148,18 +177,23 @@ void MergeDownLayerCommand::onExecute(Context* context)
         if (dst_cel->links())
           tx(new cmd::UnlinkCel(dst_cel));
 
-        // Then modify the dst_cel
-        tx(new cmd::SetCelPosition(dst_cel,
+
+        // Then modify whichever one of the two cels
+        // is at the bottom, regardless of z-index
+        tx(new cmd::SetCelPosition(bottom_cel,
             bounds.x, bounds.y));
 
+        tx(new cmd::SetCelOpacity(bottom_cel,
+            dst_cel->opacity()));
+
         tx(new cmd::ReplaceImage(sprite,
-            dst_cel->imageRef(), new_image));
+            bottom_cel->imageRef(), new_image));
       }
     }
   }
 
-  document->notifyLayerMergedDown(src_layer, dst_layer);
-  document->getApi(tx).removeLayer(src_layer); // src_layer is deleted inside removeLayer()
+  document->notifyLayerMergedDown(top_layer, bottom_layer);
+  document->getApi(tx).removeLayer(top_layer); // top_layer is deleted inside removeLayer()
 
   tx.commit();
 
