@@ -12,12 +12,18 @@
 #include "app/cmd/flatten_layers.h"
 
 #include "app/cmd/add_layer.h"
+#include "app/cmd/add_cel.h"
 #include "app/cmd/configure_background.h"
 #include "app/cmd/copy_rect.h"
 #include "app/cmd/move_layer.h"
 #include "app/cmd/remove_layer.h"
+#include "app/cmd/replace_image.h"
 #include "app/cmd/set_layer_flags.h"
 #include "app/cmd/set_layer_name.h"
+#include "app/cmd/set_layer_opacity.h"
+#include "app/cmd/set_layer_blend_mode.h"
+#include "app/cmd/set_cel_opacity.h"
+#include "app/cmd/set_cel_position.h"
 #include "app/cmd/unlink_cel.h"
 #include "app/doc.h"
 #include "app/i18n/strings.h"
@@ -34,10 +40,12 @@ namespace cmd {
 
 FlattenLayers::FlattenLayers(doc::Sprite* sprite,
                              const doc::SelectedLayers& layers0,
-                             const bool newBlend)
+                             const bool newBlend,
+                             const bool mergeDown)
   : WithSprite(sprite)
 {
   m_newBlendMethod = newBlend;
+  m_mergeDown = mergeDown;
   doc::SelectedLayers layers(layers0);
   layers.removeChildrenIfParentIsSelected();
 
@@ -48,6 +56,7 @@ FlattenLayers::FlattenLayers(doc::Sprite* sprite,
 
 void FlattenLayers::onExecute()
 {
+
   Sprite* sprite = this->sprite();
   auto doc = static_cast<Doc*>(sprite->document());
 
@@ -78,6 +87,12 @@ void FlattenLayers::onExecute()
     // There exists a visible background layer, so we will flatten onto that.
     bgcolor = doc->bgColor(flatLayer);
   }
+  // Get bottom layer when merging down, but only if
+  // we are not flattening into the background layer
+  else if (m_mergeDown) {
+    flatLayer = static_cast<LayerImage*>(list.front());
+    bgcolor = sprite->transparentColor();
+  }
   else {
     // Create a new transparent layer to flatten everything onto it.
     flatLayer = new LayerImage(sprite);
@@ -106,7 +121,23 @@ void FlattenLayers::onExecute()
       // TODO Keep cel links when possible
 
       ImageRef cel_image;
+      gfx::Rect bounds_start = image->bounds();
+      gfx::Rect bounds = bounds_start;
       Cel* cel = flatLayer->cel(frame);
+
+      bool shrink=doc::algorithm::shrink_bounds(
+        image.get(), image->maskColor(), nullptr,
+        bounds_start, bounds);
+
+      if (!shrink)
+        continue;
+
+      image.reset(doc::crop_image(
+        image.get(),
+        bounds.x-bounds_start.x,
+        bounds.y-bounds_start.y,
+        bounds.w, bounds.h, image->maskColor()));
+
       if (cel) {
         if (cel->links())
           executeAndAdd(new cmd::UnlinkCel(cel));
@@ -114,27 +145,55 @@ void FlattenLayers::onExecute()
         cel_image = cel->imageRef();
         ASSERT(cel_image);
 
-        executeAndAdd(
-          new cmd::CopyRect(cel_image.get(), image.get(),
-                            gfx::Clip(0, 0, image->bounds())));
-      }
-      else {
-        gfx::Rect bounds(image->bounds());
-        if (doc::algorithm::shrink_bounds(
-              image.get(), image->maskColor(), nullptr, bounds)) {
-          cel_image.reset(
-            doc::crop_image(image.get(), bounds, image->maskColor()));
-          cel = new Cel(frame, cel_image);
-          cel->setPosition(bounds.origin());
-          flatLayer->addCel(cel);
+        if (!m_mergeDown) {
+          executeAndAdd(new cmd::CopyRect(
+            cel_image.get(), image.get(),
+            gfx::Clip(0, 0, bounds)));
+        }
+        else {
+
+          executeAndAdd(new cmd::SetCelOpacity(cel, 255));
+          executeAndAdd(new cmd::SetCelPosition(cel, bounds.x, bounds.y));
+
+          executeAndAdd(new cmd::ReplaceImage(sprite,
+            cel->imageRef(), image));
         }
       }
+      else {
+        image.reset(
+          doc::crop_image(image.get(), bounds_start, image->maskColor()));
+
+        cel = new Cel(frame, image);
+        cel->setPosition(bounds_start.origin());
+
+        if (!m_mergeDown) {
+          flatLayer->addCel(cel);
+        }
+        else {
+          executeAndAdd(new cmd::AddCel(flatLayer, cel));
+        }
+      }
+
+      image.reset(doc::crop_image(
+        image.get(), bounds_start, image->maskColor()));
+
     }
+  }
+
+  // Update layer properties when merging down
+  if (m_mergeDown) {
+
+    executeAndAdd(new cmd::SetLayerOpacity(flatLayer, 255));
+    executeAndAdd(new cmd::SetLayerBlendMode(
+      flatLayer, doc::BlendMode::NORMAL));
+
+    doc->notifyLayerMergedDown(list.back(), flatLayer);
   }
 
   // Add new flatten layer
   if (newFlatLayer)
-    executeAndAdd(new cmd::AddLayer(list.front()->parent(), flatLayer, list.front()));
+    executeAndAdd(new cmd::AddLayer(
+      list.front()->parent(), flatLayer, list.front()));
 
   // Delete flattened layers.
   for (Layer* layer : layers) {

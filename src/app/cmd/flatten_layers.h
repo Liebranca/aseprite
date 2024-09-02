@@ -22,7 +22,8 @@ namespace cmd {
   public:
     FlattenLayers(doc::Sprite* sprite,
                   const doc::SelectedLayers& layers,
-                  const bool newBlendMethod);
+                  const bool newBlendMethod,
+                  const bool mergeDown = false);
 
   protected:
     void onExecute() override;
@@ -30,6 +31,7 @@ namespace cmd {
   private:
     doc::ObjectIds m_layerIds;
     bool m_newBlendMethod;
+    bool m_mergeDown;
   };
 
 } // namespace cmd
