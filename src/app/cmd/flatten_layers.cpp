@@ -17,6 +17,7 @@
 #include "app/cmd/copy_rect.h"
 #include "app/cmd/move_layer.h"
 #include "app/cmd/remove_layer.h"
+#include "app/cmd/remove_cel.h"
 #include "app/cmd/replace_image.h"
 #include "app/cmd/set_layer_flags.h"
 #include "app/cmd/set_layer_name.h"
@@ -24,6 +25,7 @@
 #include "app/cmd/set_layer_blend_mode.h"
 #include "app/cmd/set_cel_opacity.h"
 #include "app/cmd/set_cel_position.h"
+#include "app/cmd/set_cel_zindex.h"
 #include "app/cmd/unlink_cel.h"
 #include "app/doc.h"
 #include "app/i18n/strings.h"
@@ -118,82 +120,89 @@ void FlattenLayers::onExecute()
       clear_image(image.get(), bgcolor);
       render.renderSprite(image.get(), sprite, frame);
 
-      // TODO Keep cel links when possible
-
-      ImageRef cel_image;
+      // Get exact bounds for rendered frame
       gfx::Rect bounds_start = image->bounds();
       gfx::Rect bounds = bounds_start;
-      Cel* cel = flatLayer->cel(frame);
 
       bool shrink=doc::algorithm::shrink_bounds(
         image.get(), image->maskColor(), nullptr,
         bounds_start, bounds);
 
-      if (!shrink)
+      // Skip when fully transparent
+      Cel* cel = flatLayer->cel(frame);
+      if (!shrink) {
+        if (!newFlatLayer && cel)
+          executeAndAdd(new cmd::RemoveCel(cel));
+
         continue;
+      }
 
-      image.reset(doc::crop_image(
-        image.get(),
-        bounds.x-bounds_start.x,
-        bounds.y-bounds_start.y,
-        bounds.w, bounds.h, image->maskColor()));
+      // Apply shrunk bounds to new image
+      ImageRef new_image(doc::crop_image(
+        image.get(), bounds, image->maskColor()));
 
+      // Replace image on existing cel
       if (cel) {
+
+        // TODO Keep cel links when possible
+
         if (cel->links())
           executeAndAdd(new cmd::UnlinkCel(cel));
 
-        cel_image = cel->imageRef();
+        ImageRef cel_image = cel->imageRef();
         ASSERT(cel_image);
 
-        if (!m_mergeDown) {
-          executeAndAdd(new cmd::CopyRect(
-            cel_image.get(), image.get(),
-            gfx::Clip(0, 0, bounds)));
-        }
-        else {
-
+        // Reset cel properties when flattening in-place
+        if (!newFlatLayer) {
           executeAndAdd(new cmd::SetCelOpacity(cel, 255));
           executeAndAdd(new cmd::SetCelPosition(cel, bounds.x, bounds.y));
-
-          executeAndAdd(new cmd::ReplaceImage(sprite,
-            cel->imageRef(), image));
         }
+
+        // Adjust positive z-index for a non-background flatLayer
+        // to account for the number of layers being removed
+        if (!backgroundIsSel && cel->zIndex() > 0)
+          executeAndAdd(new cmd::SetCelZIndex(cel,
+            cel->zIndex() - (list.size() - 1)));
+
+        // Modify destination cel
+        executeAndAdd(new cmd::ReplaceImage(sprite, cel_image, new_image));
       }
+      // Add new cel on null
       else {
-        image.reset(
-          doc::crop_image(image.get(), bounds_start, image->maskColor()));
 
-        cel = new Cel(frame, image);
-        cel->setPosition(bounds_start.origin());
+        cel = new Cel(frame, new_image);
+        cel->setPosition(bounds.origin());
+        cel->setZIndex();
 
-        if (!m_mergeDown) {
+        // No need to undo adding this cel when flattening onto
+        // a new layer, as the layer itself would be destroyed,
+        // hence the lack of a command
+        if (newFlatLayer) {
           flatLayer->addCel(cel);
         }
         else {
           executeAndAdd(new cmd::AddCel(flatLayer, cel));
         }
       }
-
-      image.reset(doc::crop_image(
-        image.get(), bounds_start, image->maskColor()));
-
     }
   }
 
-  // Update layer properties when merging down
-  if (m_mergeDown) {
+  // Notify observers when merging down
+  if (m_mergeDown)
+    doc->notifyLayerMergedDown(list.back(), flatLayer);
 
+  // Add new flatten layer
+  if (newFlatLayer) {
+    executeAndAdd(new cmd::AddLayer(
+      list.front()->parent(), flatLayer, list.front()));
+
+  }
+  // Reset layer properties when flattening in-place
+  else {
     executeAndAdd(new cmd::SetLayerOpacity(flatLayer, 255));
     executeAndAdd(new cmd::SetLayerBlendMode(
       flatLayer, doc::BlendMode::NORMAL));
-
-    doc->notifyLayerMergedDown(list.back(), flatLayer);
   }
-
-  // Add new flatten layer
-  if (newFlatLayer)
-    executeAndAdd(new cmd::AddLayer(
-      list.front()->parent(), flatLayer, list.front()));
 
   // Delete flattened layers.
   for (Layer* layer : layers) {

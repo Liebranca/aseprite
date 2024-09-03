@@ -82,7 +82,7 @@ void MergeDownLayerCommand::onExecute(Context* context)
 
   DocRange range;
   range.selectLayer(writer.layer());
-  range.selectLayer(bottom_layer);
+  range.selectLayer(dst_layer);
   const bool newBlend = Preferences::instance().experimental.newBlend();
   tx(new cmd::FlattenLayers(sprite,
                             range.selectedLayers(),
