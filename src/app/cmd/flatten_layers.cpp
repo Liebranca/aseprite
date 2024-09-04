@@ -78,6 +78,8 @@ void FlattenLayers::onExecute()
   // Extend the drawable area beyond the sprite bounds
   // when this option is enabled
   ImageSpec spec = sprite->spec();
+  int area_x = 0;
+  int area_y = 0;
   if (m_flags & Flags::ExtendCanvas) {
 
     int mX = spec.width();
@@ -106,8 +108,15 @@ void FlattenLayers::onExecute()
       }
     }
 
-    spec.setWidth(mX);
-    spec.setHeight(mY);
+    if (mX != spec.width()) {
+      spec.setWidth(mX*2);
+      area_x = mX/2;
+    }
+
+    if (mY != spec.height()) {
+      spec.setHeight(mY*2);
+      area_y = mY/2;
+    }
   }
 
   // Create a temporary image.
@@ -147,11 +156,11 @@ void FlattenLayers::onExecute()
     RestoreVisibleLayers restore;
     restore.showSelectedLayers(sprite, layers);
 
-    gfx::RectF area(spec.width(), spec.height());
-    area.x = spec.width() * -0.5f;
-    area.y = spec.height() * -0.5f;
-    area.w *= 2;
-    area.h *= 2;
+    // Map canvas to extended draw area
+    gfx::ClipF area(
+      0, 0,
+      -area_x, -area_y,
+      spec.width(), spec.height());
 
     // Copy all frames to the background.
     for (frame_t frame(0); frame<sprite->totalFrames(); ++frame) {
@@ -194,7 +203,9 @@ void FlattenLayers::onExecute()
         // Reset cel properties when flattening in-place
         if (!newFlatLayer) {
           executeAndAdd(new cmd::SetCelOpacity(cel, 255));
-          executeAndAdd(new cmd::SetCelPosition(cel, bounds.x, bounds.y));
+          executeAndAdd(new cmd::SetCelPosition(cel,
+            area.src.x+bounds.x,
+            area.src.y+bounds.y));
         }
 
         // Adjust positive z-index for a non-background flatLayer
@@ -210,7 +221,9 @@ void FlattenLayers::onExecute()
       else {
 
         cel = new Cel(frame, new_image);
-        cel->setPosition(bounds.origin());
+        cel->setPosition(
+          area.src.x+bounds.x,
+          area.src.y+bounds.y);
 
         // No need to undo adding this cel when flattening onto
         // a new layer, as the layer itself would be destroyed,
