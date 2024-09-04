@@ -84,10 +84,12 @@ void MergeDownLayerCommand::onExecute(Context* context)
   range.selectLayer(writer.layer());
   range.selectLayer(dst_layer);
   const bool newBlend = Preferences::instance().experimental.newBlend();
+
   tx(new cmd::FlattenLayers(sprite,
-                            range.selectedLayers(),
-                            newBlend,
-                            true));
+    range.selectedLayers(),
+    int(newBlend) |
+    cmd::FlattenLayers::Flags::MergeDown |
+    cmd::FlattenLayers::Flags::ExtendCanvas));
 
   tx.commit();
 

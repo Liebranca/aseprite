@@ -42,12 +42,10 @@ namespace cmd {
 
 FlattenLayers::FlattenLayers(doc::Sprite* sprite,
                              const doc::SelectedLayers& layers0,
-                             const bool newBlend,
-                             const bool mergeDown)
+                             const int flags)
   : WithSprite(sprite)
 {
-  m_newBlendMethod = newBlend;
-  m_mergeDown = mergeDown;
+  m_flags = flags;
   doc::SelectedLayers layers(layers0);
   layers.removeChildrenIfParentIsSelected();
 
@@ -77,8 +75,43 @@ void FlattenLayers::onExecute()
   if (list.empty())
     return;                     // Do nothing
 
+  // Extend the drawable area beyond the sprite bounds
+  // when this option is enabled
+  ImageSpec spec = sprite->spec();
+  if (m_flags & Flags::ExtendCanvas) {
+
+    int mX = spec.width();
+    int mY = spec.height();
+
+    for (frame_t frame(0); frame<sprite->totalFrames(); ++frame) {
+      for (Layer* layer : layers) {
+
+        Cel* cel = layer->cel(frame);
+        if (!cel)
+          continue;
+
+        gfx::Rect bounds = cel->bounds();
+
+        int x = (bounds.x < 0 ? bounds.w+spec.width()+abs(bounds.x):
+                                bounds.w+bounds.x);
+
+        int y = (bounds.y < 0 ? bounds.h+spec.height()+abs(bounds.y):
+                                bounds.h+bounds.y);
+
+        if (x > mX)
+          mX = x;
+
+        if (y > mY)
+          mY = y;
+      }
+    }
+
+    spec.setWidth(mX);
+    spec.setHeight(mY);
+  }
+
   // Create a temporary image.
-  ImageRef image(Image::create(sprite->spec()));
+  ImageRef image(Image::create(spec));
 
   LayerImage* flatLayer;  // The layer onto which everything will be flattened.
   color_t bgcolor;        // The background color to use for flatLayer.
@@ -91,7 +124,7 @@ void FlattenLayers::onExecute()
   }
   // Get bottom layer when merging down, but only if
   // we are not flattening into the background layer
-  else if (m_mergeDown) {
+  else if (m_flags & Flags::MergeDown) {
     flatLayer = static_cast<LayerImage*>(list.front());
     bgcolor = sprite->transparentColor();
   }
@@ -105,7 +138,7 @@ void FlattenLayers::onExecute()
   }
 
   render::Render render;
-  render.setNewBlend(m_newBlendMethod);
+  render.setNewBlend(m_flags & Flags::NewBlendMethod);
   render.setBgOptions(render::BgOptions::MakeNone());
 
   {
@@ -114,11 +147,17 @@ void FlattenLayers::onExecute()
     RestoreVisibleLayers restore;
     restore.showSelectedLayers(sprite, layers);
 
+    gfx::RectF area(spec.width(), spec.height());
+    area.x = spec.width() * -0.5f;
+    area.y = spec.height() * -0.5f;
+    area.w *= 2;
+    area.h *= 2;
+
     // Copy all frames to the background.
     for (frame_t frame(0); frame<sprite->totalFrames(); ++frame) {
       // Clear the image and render this frame.
       clear_image(image.get(), bgcolor);
-      render.renderSprite(image.get(), sprite, frame);
+      render.renderSprite(image.get(), sprite, frame, area);
 
       // Get exact bounds for rendered frame
       gfx::Rect bounds_start = image->bounds();
@@ -172,7 +211,6 @@ void FlattenLayers::onExecute()
 
         cel = new Cel(frame, new_image);
         cel->setPosition(bounds.origin());
-        cel->setZIndex();
 
         // No need to undo adding this cel when flattening onto
         // a new layer, as the layer itself would be destroyed,
@@ -188,7 +226,7 @@ void FlattenLayers::onExecute()
   }
 
   // Notify observers when merging down
-  if (m_mergeDown)
+  if (m_flags & Flags::MergeDown)
     doc->notifyLayerMergedDown(list.back(), flatLayer);
 
   // Add new flatten layer
