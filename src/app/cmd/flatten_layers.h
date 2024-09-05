@@ -21,23 +21,29 @@ namespace cmd {
                       , public WithSprite {
   public:
 
-    enum Flags {
-      NewBlendMethod = 0x01,
-      MergeDown = 0x02,
-      ExtendCanvas = 0x04,
+    enum Options {
+      NewBlendMethod  = 0x01,
+      Inplace         = 0x02,
+      MergeDown       = 0x04,
+      ExtendCanvas    = 0x08,
+      AdjustZIndex    = 0x10,
 
     };
 
     FlattenLayers(doc::Sprite* sprite,
                   const doc::SelectedLayers& layers,
-                  const int flags);
+                  const int options);
 
   protected:
     void onExecute() override;
 
   private:
+
+    struct LoopContext;
+    void adjustZIndex(LoopContext& ctx);
+
     doc::ObjectIds m_layerIds;
-    int m_flags;
+    int m_options;
   };
 
 } // namespace cmd

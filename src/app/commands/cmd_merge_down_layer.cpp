@@ -88,8 +88,10 @@ void MergeDownLayerCommand::onExecute(Context* context)
   tx(new cmd::FlattenLayers(sprite,
     range.selectedLayers(),
     int(newBlend) |
-    cmd::FlattenLayers::Flags::MergeDown |
-    cmd::FlattenLayers::Flags::ExtendCanvas));
+    cmd::FlattenLayers::Options::Inplace |
+    cmd::FlattenLayers::Options::MergeDown |
+    cmd::FlattenLayers::Options::ExtendCanvas |
+    cmd::FlattenLayers::Options::AdjustZIndex));
 
   tx.commit();
 

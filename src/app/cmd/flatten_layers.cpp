@@ -40,12 +40,19 @@
 namespace app {
 namespace cmd {
 
+struct FlattenLayers::LoopContext {
+  LayerImage* layer;
+  Cel* cel;
+  LayerList& list;
+  frame_t frame;
+};
+
 FlattenLayers::FlattenLayers(doc::Sprite* sprite,
                              const doc::SelectedLayers& layers0,
-                             const int flags)
+                             const int options)
   : WithSprite(sprite)
 {
-  m_flags = flags;
+  m_options = options;
   doc::SelectedLayers layers(layers0);
   layers.removeChildrenIfParentIsSelected();
 
@@ -80,23 +87,21 @@ void FlattenLayers::onExecute()
   ImageSpec spec = sprite->spec();
   int area_x = 0;
   int area_y = 0;
-  if (m_flags & Flags::ExtendCanvas) {
-
+  if (m_options & Options::ExtendCanvas) {
+    // Get initial dimentions of draw area
     int mX = spec.width();
     int mY = spec.height();
 
     for (frame_t frame(0); frame<sprite->totalFrames(); ++frame) {
       for (Layer* layer : layers) {
-
         Cel* cel = layer->cel(frame);
         if (!cel)
           continue;
 
+        // Is this cel outside of the current dimentions?
         gfx::Rect bounds = cel->bounds();
-
         int x = (bounds.x < 0 ? bounds.w+spec.width()+abs(bounds.x):
                                 bounds.w+bounds.x);
-
         int y = (bounds.y < 0 ? bounds.h+spec.height()+abs(bounds.y):
                                 bounds.h+bounds.y);
 
@@ -108,11 +113,11 @@ void FlattenLayers::onExecute()
       }
     }
 
+    // Update size of draw area
     if (mX != spec.width()) {
       spec.setWidth(mX*2);
       area_x = mX/2;
     }
-
     if (mY != spec.height()) {
       spec.setHeight(mY*2);
       area_y = mY/2;
@@ -131,9 +136,9 @@ void FlattenLayers::onExecute()
     // There exists a visible background layer, so we will flatten onto that.
     bgcolor = doc->bgColor(flatLayer);
   }
-  // Get bottom layer when merging down, but only if
+  // Get bottom layer when merging layers in-place, but only if
   // we are not flattening into the background layer
-  else if (m_flags & Flags::MergeDown) {
+  else if (m_options & Options::Inplace) {
     flatLayer = static_cast<LayerImage*>(list.front());
     bgcolor = sprite->transparentColor();
   }
@@ -147,7 +152,7 @@ void FlattenLayers::onExecute()
   }
 
   render::Render render;
-  render.setNewBlend(m_flags & Flags::NewBlendMethod);
+  render.setNewBlend(m_options & Options::NewBlendMethod);
   render.setBgOptions(render::BgOptions::MakeNone());
 
   {
@@ -208,18 +213,11 @@ void FlattenLayers::onExecute()
             area.src.y+bounds.y));
         }
 
-        // Adjust positive z-index for a non-background flatLayer
-        // to account for the number of layers being removed
-        if (!backgroundIsSel && cel->zIndex() > 0)
-          executeAndAdd(new cmd::SetCelZIndex(cel,
-            cel->zIndex() - (list.size() - 1)));
-
         // Modify destination cel
         executeAndAdd(new cmd::ReplaceImage(sprite, cel_image, new_image));
       }
       // Add new cel on null
       else {
-
         cel = new Cel(frame, new_image);
         cel->setPosition(
           area.src.x+bounds.x,
@@ -235,11 +233,25 @@ void FlattenLayers::onExecute()
           executeAndAdd(new cmd::AddCel(flatLayer, cel));
         }
       }
+
+      // Adjust z-index for a non-background flatLayer
+      // to account for the number of layers being removed
+      if ((m_options & Options::AdjustZIndex) &&
+          !backgroundIsSel) {
+        LoopContext ctx = {
+          .layer = flatLayer,
+          .cel = cel,
+          .list = list,
+          .frame = frame
+        };
+
+        adjustZIndex(ctx);
+      }
     }
   }
 
   // Notify observers when merging down
-  if (m_flags & Flags::MergeDown)
+  if (m_options & Options::MergeDown)
     doc->notifyLayerMergedDown(list.back(), flatLayer);
 
   // Add new flatten layer
@@ -262,6 +274,101 @@ void FlattenLayers::onExecute()
     if (layer != flatLayer) {
       executeAndAdd(new cmd::RemoveLayer(layer));
     }
+  }
+}
+
+// WIP
+void FlattenLayers::adjustZIndex(LoopContext& ctx)
+{
+  // Value before/after adjustment
+  int old_zindex = ctx.cel->zIndex();
+  int new_zindex = old_zindex;
+
+  // Number of layers effectively removed
+  int cnt = ctx.list.size()-1;
+
+  // Inspect "outer" layers, that is, those that are
+  // not part of the merge
+  std::vector<int> overlay;    // z-index for top outer layers
+  std::vector<int> background; // z-index for bottom outer layers
+
+  {
+    Layer* anchor;
+    Cel* cel;
+    int i;
+
+    i = cnt+1+1;
+    anchor = ctx.list.back();
+    while ((anchor = anchor->getNext()) != NULL) {
+      cel = anchor->cel(ctx.frame);
+      if (cel) {
+        int zindex = cel->zIndex();
+        if (abs(zindex) <= cnt)
+          overlay.push_back(zindex+i);
+      }
+      i++;
+    }
+
+    i = -1;
+    anchor = ctx.list.front();
+    while ((anchor = anchor->getPrevious()) != NULL) {
+      cel = anchor->cel(ctx.frame);
+      if (cel) {
+        int zindex = cel->zIndex()+i;
+        if (zindex > 0)
+          background.push_back(zindex);
+      }
+      i--;
+    }
+  }
+
+
+  // ~
+  int i = -1;
+  bool mod = false;
+  for (Layer* layer : ctx.list) {
+    // Get current frame
+    Cel* cel = layer->cel(ctx.frame);
+    i++;
+
+    // Skip null or destination
+    if (!cel || layer == ctx.layer)
+      continue;
+
+    // Replace current value?
+    int zindex = cel->zIndex()+i;
+    if (!new_zindex)
+      new_zindex = zindex;
+
+    // Compare against "outer" layers
+    for (int above : overlay) {
+      if (zindex >= above && new_zindex < above) {
+        new_zindex = above-i;
+        mod = true;
+      }
+    }
+
+    for (int below : background) {
+      if (zindex < below && new_zindex+i > below) {
+        if (mod) {
+          new_zindex = old_zindex;
+          goto skip;
+        }
+        else {
+          new_zindex = below+i;
+        }
+      }
+    }
+  }
+
+  // Assign adjusted value
+  new_zindex -= cnt*(new_zindex > 0);
+  skip:
+  if (!ctx.layer->cel(ctx.frame)) {
+    ctx.cel->setZIndex(new_zindex);
+  }
+  else {
+    executeAndAdd(new cmd::SetCelZIndex(ctx.cel, new_zindex));
   }
 }
 
