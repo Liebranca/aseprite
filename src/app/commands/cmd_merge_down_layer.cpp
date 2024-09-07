@@ -20,12 +20,8 @@
 #include "app/modules/gui.h"
 #include "app/tx.h"
 #include "doc/blend_internals.h"
-#include "doc/cel.h"
-#include "doc/image.h"
 #include "doc/layer.h"
-#include "doc/primitives.h"
 #include "doc/sprite.h"
-#include "render/rasterize.h"
 #include "ui/ui.h"
 
 namespace app {
@@ -90,8 +86,7 @@ void MergeDownLayerCommand::onExecute(Context* context)
     int(newBlend) |
     cmd::FlattenLayers::Options::Inplace |
     cmd::FlattenLayers::Options::MergeDown |
-    cmd::FlattenLayers::Options::ExtendCanvas |
-    cmd::FlattenLayers::Options::AdjustZIndex));
+    cmd::FlattenLayers::Options::ExtendCanvas));
 
   tx.commit();
 

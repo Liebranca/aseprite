@@ -14,7 +14,6 @@
 #include "app/cmd/add_layer.h"
 #include "app/cmd/add_cel.h"
 #include "app/cmd/configure_background.h"
-#include "app/cmd/copy_rect.h"
 #include "app/cmd/move_layer.h"
 #include "app/cmd/remove_layer.h"
 #include "app/cmd/remove_cel.h"
@@ -25,7 +24,6 @@
 #include "app/cmd/set_layer_blend_mode.h"
 #include "app/cmd/set_cel_opacity.h"
 #include "app/cmd/set_cel_position.h"
-#include "app/cmd/set_cel_zindex.h"
 #include "app/cmd/unlink_cel.h"
 #include "app/doc.h"
 #include "app/i18n/strings.h"
@@ -39,13 +37,6 @@
 
 namespace app {
 namespace cmd {
-
-struct FlattenLayers::LoopContext {
-  LayerImage* layer;
-  Cel* cel;
-  LayerList& list;
-  frame_t frame;
-};
 
 FlattenLayers::FlattenLayers(doc::Sprite* sprite,
                              const doc::SelectedLayers& layers0,
@@ -92,6 +83,8 @@ void FlattenLayers::onExecute()
     int mX = spec.width();
     int mY = spec.height();
 
+    // Check those bounds against every frame of every layer that
+    // will be merged
     for (frame_t frame(0); frame<sprite->totalFrames(); ++frame) {
       for (Layer* layer : layers) {
         Cel* cel = layer->cel(frame);
@@ -233,20 +226,6 @@ void FlattenLayers::onExecute()
           executeAndAdd(new cmd::AddCel(flatLayer, cel));
         }
       }
-
-      // Adjust z-index for a non-background flatLayer
-      // to account for the number of layers being removed
-      if ((m_options & Options::AdjustZIndex) &&
-          !backgroundIsSel) {
-        LoopContext ctx = {
-          .layer = flatLayer,
-          .cel = cel,
-          .list = list,
-          .frame = frame
-        };
-
-        adjustZIndex(ctx);
-      }
     }
   }
 
@@ -274,101 +253,6 @@ void FlattenLayers::onExecute()
     if (layer != flatLayer) {
       executeAndAdd(new cmd::RemoveLayer(layer));
     }
-  }
-}
-
-// WIP
-void FlattenLayers::adjustZIndex(LoopContext& ctx)
-{
-  // Value before/after adjustment
-  int old_zindex = ctx.cel->zIndex();
-  int new_zindex = old_zindex;
-
-  // Number of layers effectively removed
-  int cnt = ctx.list.size()-1;
-
-  // Inspect "outer" layers, that is, those that are
-  // not part of the merge
-  std::vector<int> overlay;    // z-index for top outer layers
-  std::vector<int> background; // z-index for bottom outer layers
-
-  {
-    Layer* anchor;
-    Cel* cel;
-    int i;
-
-    i = cnt+1+1;
-    anchor = ctx.list.back();
-    while ((anchor = anchor->getNext()) != NULL) {
-      cel = anchor->cel(ctx.frame);
-      if (cel) {
-        int zindex = cel->zIndex();
-        if (abs(zindex) <= cnt)
-          overlay.push_back(zindex+i);
-      }
-      i++;
-    }
-
-    i = -1;
-    anchor = ctx.list.front();
-    while ((anchor = anchor->getPrevious()) != NULL) {
-      cel = anchor->cel(ctx.frame);
-      if (cel) {
-        int zindex = cel->zIndex()+i;
-        if (zindex > 0)
-          background.push_back(zindex);
-      }
-      i--;
-    }
-  }
-
-
-  // ~
-  int i = -1;
-  bool mod = false;
-  for (Layer* layer : ctx.list) {
-    // Get current frame
-    Cel* cel = layer->cel(ctx.frame);
-    i++;
-
-    // Skip null or destination
-    if (!cel || layer == ctx.layer)
-      continue;
-
-    // Replace current value?
-    int zindex = cel->zIndex()+i;
-    if (!new_zindex)
-      new_zindex = zindex;
-
-    // Compare against "outer" layers
-    for (int above : overlay) {
-      if (zindex >= above && new_zindex < above) {
-        new_zindex = above-i;
-        mod = true;
-      }
-    }
-
-    for (int below : background) {
-      if (zindex < below && new_zindex+i > below) {
-        if (mod) {
-          new_zindex = old_zindex;
-          goto skip;
-        }
-        else {
-          new_zindex = below+i;
-        }
-      }
-    }
-  }
-
-  // Assign adjusted value
-  new_zindex -= cnt*(new_zindex > 0);
-  skip:
-  if (!ctx.layer->cel(ctx.frame)) {
-    ctx.cel->setZIndex(new_zindex);
-  }
-  else {
-    executeAndAdd(new cmd::SetCelZIndex(ctx.cel, new_zindex));
   }
 }
 
